@@ -51,7 +51,7 @@ The system is designed to efficiently process large volumes of text data using P
 | **Sequential vs Parallel Timing** | Measures and compares both execution modes |
 | **Speedup Calculation** | Shows how many times faster parallel is vs sequential |
 | **Multi-format Support** | Auto-detects `.txt`, `.csv`, `.json`, `.jsonl`, `.xml`, `.md`, `.log` |
-| **Any File Size** | Handles small snippets to 50,000+ row CSV files |
+| **Any File Size** | Handles small snippets up to ~1 million rows reliably |
 | **Raw Text Input** | Paste text directly without uploading a file |
 
 ### Sentiment Analysis Engine
