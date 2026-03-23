@@ -8,7 +8,7 @@
 ![License](https://img.shields.io/badge/License-MIT-00f5c4?style=for-the-badge)
 ![Internship](https://img.shields.io/badge/Infosys%20Springboard-6.0-FF6200?style=for-the-badge)
 
-**A Scalable, Parallel Text Processing System built for the Infosys Springboard Internship 6.0**
+**A Scalable, Parallel Text Processing System developed during Infosys Springboard Internship 6.0**
 
 *Processes any text file at machine speed — chunks, scores sentiment, detects themes, visualizes results — simultaneously across CPU cores.*
 
