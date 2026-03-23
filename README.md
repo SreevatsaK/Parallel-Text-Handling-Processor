@@ -147,7 +147,7 @@ http://localhost:5000
 ## 📁 Project Structure
 
 ```
-SENTRIX/
+Project/
 │
 ├── app.py                  ← Flask server — routes, processing, export, email
 ├── chunker.py              ← Universal file chunker (line/row based)
