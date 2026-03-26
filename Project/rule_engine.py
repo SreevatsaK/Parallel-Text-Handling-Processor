@@ -1,23 +1,3 @@
-"""
-rule_engine.py — Rule-Based Sentiment Engine
-──────────────────────────────────────────────
-Scoring thresholds:
-    score == 0   → Neutral
-    score >= 1   → Positive
-    score >= 5   → Strongly Positive
-    score <= -1  → Negative
-    score <= -5  → Strongly Negative
-
-Logic:
-    - Explicit word lists only — no suffix guessing
-    - Negation handling: "not good" → -1, "not bad" → +1
-    - Prefix morphology: unhappy → -1, unsuccessful → -1
-    - Contrast conjunctions: "but", "yet", "however", "though",
-      "although", "nevertheless" — words after them are weighted
-      against words before them (balanced scoring)
-    - Repetition counts: "good good good" → +3
-"""
-
 import re
 from collections import Counter
 
