@@ -1,18 +1,25 @@
-"""
-database.py  —  SQLite Storage Layer
-Improvements:
-  • check_same_thread=False + WAL mode → safe parallel writes
-  • Stores positive_words / negative_words / word_frequencies
-  • Keeps data between runs (no DROP on init — use reset explicitly)
-  • export_to_csv writes to data/ folder
-"""
-
 import sqlite3
 import csv
 import json
+import threading
 from datetime import datetime
 
 DB_NAME = "data/text_processing.db"
+
+_db_lock = threading.Lock()
+
+
+# ──────────────────────────────────────────────────────────────
+#  HELPERS
+# ──────────────────────────────────────────────────────────────
+
+def _get_conn() -> sqlite3.Connection:
+    """Open a WAL-mode connection with a generous busy timeout."""
+    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")   # wait up to 5 s before raising
+    return conn
 
 
 # ──────────────────────────────────────────────────────────────
@@ -20,70 +27,56 @@ DB_NAME = "data/text_processing.db"
 # ──────────────────────────────────────────────────────────────
 
 def create_database(reset: bool = True):
-    """
-    Create (or recreate) the database.
-    reset=True  → DROP existing table (fresh run)
-    reset=False → Keep existing data (append mode)
-    """
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")   # allows concurrent reads during write
-    conn.execute("PRAGMA synchronous=NORMAL") # faster writes, still safe
-    cursor = conn.cursor()
+    
+    with _db_lock:
+        conn   = _get_conn()
+        cursor = conn.cursor()
 
-    if reset:
-        cursor.execute("DROP TABLE IF EXISTS processed_articles")
+        if reset:
+            cursor.execute("DROP TABLE IF EXISTS processed_articles")
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS processed_articles (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_chunk      TEXT,
-        sentiment_score INTEGER,
-        sentiment_label TEXT,
-        keyword_count   INTEGER,
-        keywords        TEXT,
-        positive_words  TEXT,
-        negative_words  TEXT,
-        word_frequencies TEXT,
-        tags            TEXT,
-        timestamp       TEXT
-    )
-    """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_articles (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            text_chunk       TEXT,
+            sentiment_score  INTEGER,
+            sentiment_label  TEXT,
+            keyword_count    INTEGER,
+            keywords         TEXT,
+            positive_words   TEXT,
+            negative_words   TEXT,
+            word_frequencies TEXT,
+            tags             TEXT,
+            timestamp        TEXT
+        )
+        """)
 
-    # Indexes for fast search
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sentiment ON processed_articles(sentiment_label)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_score     ON processed_articles(sentiment_score)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_keywords  ON processed_articles(keywords)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags      ON processed_articles(tags)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_time      ON processed_articles(timestamp)")
+        # Indexes for fast search / filter
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sentiment ON processed_articles(sentiment_label)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_score     ON processed_articles(sentiment_score)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_keywords  ON processed_articles(keywords)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tags      ON processed_articles(tags)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_time      ON processed_articles(timestamp)")
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
 
 
 # ──────────────────────────────────────────────────────────────
-#  INSERT
+#  INSERT  (thread-safe)
 # ──────────────────────────────────────────────────────────────
 
 def insert_articles_batch(articles: list[dict]):
-    """
-    Batch-insert processed article dicts into DB.
-    Each article = { "text": str, "analysis": dict }
-    Thread-safe via WAL mode.
-    """
+   
     if not articles:
         return
 
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
-    cursor = conn.cursor()
-
+    ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for article in articles:
         text     = article.get("text", "")
         analysis = article.get("analysis", {})
-
         rows.append((
             text,
             analysis.get("sentiment_score", 0),
@@ -97,15 +90,18 @@ def insert_articles_batch(articles: list[dict]):
             ts
         ))
 
-    cursor.executemany("""
-    INSERT INTO processed_articles
-        (text_chunk, sentiment_score, sentiment_label, keyword_count,
-         keywords, positive_words, negative_words, word_frequencies, tags, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, rows)
-
-    conn.commit()
-    conn.close()
+    with _db_lock:                          # ← serialise writes
+        conn   = _get_conn()
+        cursor = conn.cursor()
+        cursor.executemany("""
+            INSERT INTO processed_articles
+                (text_chunk, sentiment_score, sentiment_label, keyword_count,
+                 keywords, positive_words, negative_words, word_frequencies,
+                 tags, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        conn.commit()
+        conn.close()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -113,7 +109,7 @@ def insert_articles_batch(articles: list[dict]):
 # ──────────────────────────────────────────────────────────────
 
 def get_summary() -> dict:
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn = _get_conn()
     cur  = conn.cursor()
 
     cur.execute("SELECT COUNT(*) FROM processed_articles")
@@ -139,8 +135,8 @@ def get_summary() -> dict:
 
 def search_articles(keyword: str = "", min_score: int = None,
                     max_score: int = None, limit: int = 200) -> list:
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-    cur  = conn.cursor()
+    conn   = _get_conn()
+    cur    = conn.cursor()
 
     query  = "SELECT text_chunk, keywords, sentiment_label, sentiment_score FROM processed_articles WHERE 1=1"
     params = []
@@ -170,18 +166,18 @@ def search_articles(keyword: str = "", min_score: int = None,
 # ──────────────────────────────────────────────────────────────
 
 def export_to_csv(path: str = "data/exported_results.csv"):
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn   = _get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM processed_articles")
-    rows = cursor.fetchall()
+    rows   = cursor.fetchall()
     conn.close()
 
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "id","text_chunk","sentiment_score","sentiment_label",
-            "keyword_count","keywords","positive_words","negative_words",
-            "word_frequencies","tags","timestamp"
+            "id", "text_chunk", "sentiment_score", "sentiment_label",
+            "keyword_count", "keywords", "positive_words", "negative_words",
+            "word_frequencies", "tags", "timestamp"
         ])
         writer.writerows(rows)
 
