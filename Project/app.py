@@ -1,19 +1,9 @@
-"""
-app.py  —  Flask Backend Server
-Key upgrades:
-  • Timing: tracks sequential_time + parallel_time + speedup
-  • Supports all file formats via new chunker
-  • Exposes /timing endpoint for UI
-  • Search on text_chunk AND keywords
-  • /live_analyze: instant single-sentence analysis (no DB write)
-  • Safe parallel DB writes via WAL
-"""
-
 from flask import Flask, render_template, request, jsonify, send_file
 import sqlite3, os, threading, csv, traceback, time, json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from database    import create_database, insert_articles_batch, search_articles
+from database    import (create_database, insert_articles_batch,
+                         search_articles, get_summary, export_to_csv, _get_conn)
 from rule_engine import analyze_chunk
 from chunker     import get_chunks
 
@@ -239,7 +229,7 @@ def timing():
 
 @app.route("/results")
 def results():
-    conn = sqlite3.connect("data/text_processing.db", check_same_thread=False)
+    conn = _get_conn()
     cur  = conn.cursor()
 
     cur.execute("SELECT COUNT(*) FROM processed_articles")
@@ -272,7 +262,7 @@ def results():
 
 @app.route("/keywords")
 def keywords():
-    conn = sqlite3.connect("data/text_processing.db", check_same_thread=False)
+    conn = _get_conn()
     cur  = conn.cursor()
     cur.execute("SELECT keywords FROM processed_articles")
     rows = cur.fetchall()
@@ -342,18 +332,6 @@ def _build_export(rows, filename, fmt):
 
 # ═══════════════════════════════════════════════════════════════
 #  EMAIL CONFIGURATION
-#  Your Gmail address and App Password go here.
-#
-#  HOW TO GET A GMAIL APP PASSWORD (takes 2 minutes):
-#  1. Go to  https://myaccount.google.com/security
-#  2. Make sure "2-Step Verification" is ON  (enable it if not)
-#  3. Search "App Passwords" in the search bar on that page
-#  4. Select app: Mail  →  Select device: Windows Computer
-#  5. Click Generate  →  Copy the 16-letter password shown
-#  6. Paste it below WITHOUT spaces  e.g. "abcdwxyzefghijkl"
-#
-#  NOTE: This is NOT your regular Gmail password.
-#        Your regular password will NOT work here.
 # ═══════════════════════════════════════════════════════════════
 SMTP_SENDER   = "vatsak03@gmail.com"   # ← your Gmail (already set)
 SMTP_APP_PASS = "yjuq ofgc uuwo uvvk"  # ← paste 16-char App Password
@@ -392,7 +370,7 @@ def send_email():
     if src == "search":
         rows = last_search_results
     else:
-        conn = sqlite3.connect("data/text_processing.db", check_same_thread=False)
+        conn = _get_conn()
         cur  = conn.cursor()
         cur.execute(
             "SELECT text_chunk, keywords, sentiment_label, sentiment_score "
@@ -462,8 +440,8 @@ def export_search():
 
 @app.route("/export_all")
 def export_all():
-    fmt = request.args.get("type", "csv")
-    conn = sqlite3.connect("data/text_processing.db", check_same_thread=False)
+    fmt  = request.args.get("type", "csv")
+    conn = _get_conn()
     cur  = conn.cursor()
     cur.execute("SELECT text_chunk, keywords, sentiment_label, sentiment_score FROM processed_articles")
     rows = cur.fetchall()
@@ -472,6 +450,5 @@ def export_all():
     return send_file(path, as_attachment=True)
 
 
-# ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)   # use_reloader=False avoids double-spawning processes
